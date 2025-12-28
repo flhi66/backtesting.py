@@ -17,13 +17,17 @@ from bokeh.colors.named import (
     lime as BULL_COLOR,
     tomato as BEAR_COLOR
 )
+from bokeh.core.enums import enumeration
 from bokeh.events import DocumentReady
 from bokeh.plotting import figure as _figure
 from bokeh.models import (  # type: ignore
+    CDSView,
+    CustomJSFilter,
     CrosshairTool,
     CustomJS,
     ColumnDataSource,
     CustomJSTransform,
+    GlyphRenderer,
     Label, NumeralTickFormatter,
     Span,
     HoverTool,
@@ -42,7 +46,7 @@ from bokeh.layouts import gridplot
 from bokeh.palettes import Category10
 from bokeh.transform import factor_cmap, transform
 
-from backtesting._util import _data_period, _as_list, _Indicator, try_
+from ._util import _data_period, _as_list, _Indicator, try_
 
 with open(os.path.join(os.path.dirname(__file__), 'autoscale_cb.js'),
           encoding='utf-8') as _f:
@@ -110,7 +114,7 @@ def lightness(color, lightness=.94):
     return RGB(*rgb)
 
 
-_MAX_CANDLES = 10_000
+_MAX_CANDLES = 1_000_000
 _INDICATOR_HEIGHT = 50
 
 
@@ -138,8 +142,8 @@ def _maybe_resample_data(resample_rule, df, indicators, equity_data, trades):
         timespan = df.index[-1] - df.index[0]
         require_minutes = (timespan / _MAX_CANDLES).total_seconds() // 60
         freq = freq_minutes.where(freq_minutes >= require_minutes).first_valid_index()
-        warnings.warn(f"Data contains too many candlesticks to plot; downsampling to {freq!r}. "
-                      "See `Backtest.plot(resample=...)`")
+        print("Number of candles: ", len(df), "Resampling to: ", freq)
+        warnings.warn(f"Data contains too many candlesticks to plot; downsampling to {freq!r}. See `Backtest.plot(resample=...)`")
 
     from .lib import OHLCV_AGG, TRADES_AGG, _EQUITY_AGG
     df = df.resample(freq, label='right').agg(OHLCV_AGG).dropna()
@@ -225,16 +229,63 @@ def plot(*, results: pd.Series,
     # ohlc df may contain many columns. We're only interested in, and pass on to Bokeh, these
     df = df[list(OHLCV_AGG.keys())].copy(deep=False)
 
+    def detect_time_interval(df):
+        """
+        Bestimmt das Zeitintervall eines DataFrame-Index.
+        
+        Parameter:
+            df (pd.DataFrame): DataFrame mit DatetimeIndex.
+            
+        Rückgabe:
+            str: Zeitintervall als Pandas-Resampling-String (z.B. "1Min", "15Min", "1H", "1D").
+        """
+        if not isinstance(df.index, pd.DatetimeIndex):
+            raise ValueError("Der DataFrame muss einen DatetimeIndex haben.")
+
+        # Zeitabstände berechnen
+        diffs = df.index.to_series().diff().dropna()
+
+        # Häufigstes Intervall finden (Modus)
+        mode_interval = diffs.mode()[0]
+
+        # Intervall in Minuten umwandeln
+        interval_minutes = mode_interval.total_seconds() / 60
+
+        # Zeitintervall kategorisieren
+        if interval_minutes < 1:
+            return f"{int(interval_minutes * 60)}s"   # Sekunden
+        elif interval_minutes < 60:
+            return f"{int(interval_minutes)}Min"      # Minuten
+        elif interval_minutes < 1440:
+            return f"{int(interval_minutes / 60)}h"   # Stunden
+        else:
+            return f"{int(interval_minutes / 1440)}D" # Tage
+        
+
+    intervals = []
     # Limit data to max_candles
     if is_datetime_index:
         df, indicators, equity_data, trades = _maybe_resample_data(
             resample, df, indicators, equity_data, trades)
+        #intervals.append(detect_time_interval(df))
+        
 
     df.index.name = None  # Provides source name @index
     df['datetime'] = df.index  # Save original, maybe datetime index
     df = df.reset_index(drop=True)
     equity_data = equity_data.reset_index(drop=True)
     index = df.index
+
+    #print("df (line279)", df)
+
+    # Limit the initial y_range to the first 1000 candles
+    if len(df) > 1000:
+        initial_range = df.iloc[-1000:]
+    else:
+        initial_range = df
+
+    y_range_start = initial_range['Low'].min()  # Set the lower bound of the y-axis
+    y_range_end = initial_range['High'].max()  # Set the upper bound of the y-axis
 
     new_bokeh_figure = partial(  # type: ignore[call-arg]
         _figure,
@@ -244,14 +295,17 @@ def plot(*, results: pd.Series,
         # TODO: xwheel_pan on horizontal after https://github.com/bokeh/bokeh/issues/14363
         tools="xpan,xwheel_zoom,xwheel_pan,box_zoom,undo,redo,reset,save",
         active_drag='xpan',
-        active_scroll='xwheel_zoom')
+        active_scroll='xwheel_zoom',
+        output_backend="webgl"
+        )
 
     pad = (index[-1] - index[0]) / 20
 
-    _kwargs = dict(x_range=Range1d(index[0], index[-1],  # type: ignore[call-arg]
+    _kwargs = dict(x_range=Range1d(index[0 if len(df) <= 1000 else -1000], index[-1],  # type: ignore[call-arg]
                                    min_interval=10,
                                    bounds=(index[0] - pad,
-                                           index[-1] + pad))) if index.size > 1 else {}
+                                           index[-1] + pad)),
+                        y_range=Range1d(start=y_range_start, end=y_range_end)) if index.size > 1 else {}
     fig_ohlc = new_bokeh_figure(**_kwargs)  # type: ignore[arg-type]
     figs_above_ohlc, figs_below_ohlc = [], []
 
@@ -316,10 +370,13 @@ return this.labels[index] || "";
         else:
             formatters = {}
             tooltips = [("#", "@index")] + tooltips
-        fig.add_tools(HoverTool(
+        hovertool = HoverTool(
             point_policy='follow_mouse',
             renderers=renderers, formatters=formatters,
-            tooltips=tooltips, mode='vline' if vline else 'mouse'))
+            tooltips=tooltips, mode='vline' if vline else 'mouse')
+        fig.add_tools(hovertool)
+        return hovertool
+        
 
     def _plot_equity_section(is_return=False):
         """Equity section"""
@@ -501,19 +558,228 @@ return this.labels[index] || "";
         df2['inc'] = (df2.Close >= df2.Open).astype(int).astype(str)
         df2.index.name = None
         source2 = ColumnDataSource(df2)
-        fig_ohlc.segment('index', 'High', 'index', 'Low', source=source2, color='#bbbbbb')
+
+        # fig_ohlc.segment('index', 'High', 'index', 'Low', source=source2, color='#bbbbbb', legend_label='Superimposed')
+        s = fig_ohlc.vbar('index', 0, 'Low', 'High', source=source2, color='#bbbbbb', legend_label=f'{resample_rule}')
         colors_lighter = [lightness(BEAR_COLOR, .92),
                           lightness(BULL_COLOR, .92)]
-        fig_ohlc.vbar('index', '_width', 'Open', 'Close', source=source2, line_color=None,
-                      fill_color=factor_cmap('inc', colors_lighter, ['0', '1']))
+        r = fig_ohlc.vbar('index', '_width', 'Open', 'Close', source=source2, line_color=None,
+                      fill_color=factor_cmap('inc', colors_lighter, ['0', '1']), legend_label=f'{resample_rule}')
+        return r, s
+
+    
+    multi_tf_ohlc = {}
+    ltf_legend_labels = []
+    hover_tool_renderers = {}
+
+    def _plot_multiple_ohlc(ltf: str = "1Min", mtf: str = "15Min" , htf: str = "4h", superimpose: bool = True):
+        ltf_timedelta = pd.to_timedelta(ltf)
+        mtf_timedelta = pd.to_timedelta(mtf)
+        htf_timedelta = pd.to_timedelta(htf)
+        intervals.append(ltf)
+        intervals.append(mtf)
+        intervals.append(htf)
+        intervals.append("1D")
+        assert ltf_timedelta != mtf_timedelta != htf_timedelta and ltf_timedelta != htf_timedelta, "Choose three different timeframes"
+        timeframes = [ltf_timedelta, mtf_timedelta, htf_timedelta]
+        if not (ltf_timedelta < mtf_timedelta < htf_timedelta):
+            timeframes = sorted(timeframes)
+            warnings.warn(f"Timeframes are not in ascending order. \n" \
+                            f"They got sorted to \nltf={timeframes[0]}, \n" \
+                            f"mtf={timeframes[1]}, \nhtf={timeframes[2]}. \n")
+        resample_tf = {
+            pd.Timedelta("1Min"): "15Min",
+            pd.Timedelta("15Min"): "4h",
+            pd.Timedelta("4h") : "1D"
+        }
+        
+        # df.set_index("datetime", inplace = True)
+        # print(df)
+        # standard_tf = detect_time_interval(df)
+        standard_tf = pd.Timedelta(ltf)
+        
+        
+        for tf in timeframes[::-1]:
+            # print(tf)
+            df_resampled = (df.assign(_width=1).set_index('datetime')
+            .resample(resample_tf[tf], label='left')
+            .agg(dict(OHLCV_AGG, _width='count')))
+        
+        
+            df_resampled.index = df_resampled['_width'].cumsum().shift(1).fillna(0)
+            df_resampled.index += df_resampled['_width'] / 2 - .5
+            df_resampled['_width'] -= .1  # Candles don't touch
+
+            df_resampled['inc'] = (df_resampled.Close >= df_resampled.Open).astype(int).astype(str)
+            df_resampled.index.name = None
+            source_resampled = ColumnDataSource(df_resampled)
+
+            s = fig_ohlc.vbar('index', 0, 'Low', 'High', source=source_resampled, color='#bbbbbb')
+            colors_lighter = [lightness(BEAR_COLOR, .92),
+                            lightness(BULL_COLOR, .92)]
+            r = fig_ohlc.vbar('index', '_width', 'Open', 'Close', source=source_resampled, line_color=None,
+                        fill_color=factor_cmap('inc', colors_lighter, ['0', '1']), legend_label=f'_{resample_tf[tf]}')
+            s.visible = False  # Hide the main OHLC lines by default
+            r.visible = False  # Hide the main OHLC bars by default
+            multi_tf_ohlc[resample_tf[tf]+"_resampled"] = [r, s]
+                
+            ### Render not superimposed candles
+            df_resampled = (df.assign(_width=1).set_index('datetime')
+            .resample(tf, label='left')
+            .agg(dict(OHLCV_AGG, _width='count')))
+            current_interval = detect_time_interval(df_resampled)
+
+            df_resampled.index.name = None
+            df_resampled['datetime'] = df_resampled.index  # Save original, maybe datetime index
+            df_resampled = df_resampled.reset_index(drop=True)
+            #print(df_resampled)
+
+            # df_hover_tool = df_resampled.copy()
+            # df_hover_tool.index.name = None
+            # df_hover_tool['datetime'] = df_hover_tool.index  # Save original, maybe datetime index
+            # df_hover_tool = df_hover_tool.reset_index(drop=True)
+            # df_hover_tool = df_hover_tool.drop(columns=['_width'])
+            
+            #hover_tool_renderers[current_interval] = GlyphRenderer(data_source=ColumnDataSource(df_hover_tool))
+            # print("df_resampled\n", df_resampled)
+
+            df_resampled.index = df_resampled['_width'].cumsum().shift(1).fillna(0)
+            df_resampled.index += df_resampled['_width'] / 2 - .5
+            df_resampled['_width'] -= .1  # Candles don't touch
+
+            df_resampled['inc'] = (df_resampled.Close >= df_resampled.Open).astype(int).astype(str)
+            df_resampled.index.name = None
+
+            #print("df_resampled\n", df_resampled)
+
+            # df.index.name = None  # Provides source name @index
+            # df['datetime'] = df.index  # Save original, maybe datetime index
+            # df = df.reset_index(drop=True)
+            # equity_data = equity_data.reset_index(drop=True)
+            # index = df.index
+
+
+            if tf == standard_tf:
+                source_not_superimposed = source_filtered
+                ltf_legend_labels.append(f"{current_interval}")
+                ltf_legend_labels.append(f"_{resample_tf[tf]}")
+            else:
+                source_not_superimposed = ColumnDataSource(df_resampled)
+
+            s = fig_ohlc.vbar('index', 0, 'High', 'Low', source=source_not_superimposed, line_color="black")
+            r = fig_ohlc.vbar('index', BAR_WIDTH if tf == standard_tf else '_width', 'Open', 'Close', source=source_not_superimposed, 
+                            line_color="black", fill_color=inc_cmap, legend_label=f"{current_interval}")
+            s.visible = False  # Hide the main OHLC lines by default
+            r.visible = False  # Hide the main OHLC bars by default
+            multi_tf_ohlc[current_interval] = [r, s]
+            
+     
+
+
+    # Gefilterte Datenquelle
+    source_filtered = ColumnDataSource(df.copy())
+
+    # Initialisiere die gefilterte Datenquelle in Python
+    start = fig_ohlc.x_range.start 
+    end = fig_ohlc.x_range.end
+    data_full = source.data
+    data_filtered = {key: [] for key in data_full.keys()}
+
+    for i in range(len(data_full['index'])):
+        if data_full['index'][i] >= start and data_full['index'][i] <= end:
+            for key in data_full.keys():
+                data_filtered[key].append(data_full[key][i])
+
+    # Setze den Index als datetime
+    #data_filtered['index'] = data_filtered['datetime']^
+
+    #print("data_filtered", data_filtered.keys())
+
+    source_filtered.data = data_filtered
+
+    #source_filtered.add((df.Close >= df.Open).values.astype(np.uint8).astype(str), 'inc')
+
+    df_htf = (df.assign(_width=1).set_index('datetime')
+            .resample("4h", label='left')
+            .agg(dict(OHLCV_AGG, _width='count')))
+    
+    df_htf.index.name = None  # Provides source name @index
+    df_htf['datetime'] = df_htf.index  # Save original, maybe datetime index
+    df_htf = df_htf.reset_index(drop=True)
+    df_htf = df_htf.drop(columns=['_width'])
+
+    source_filtered_htf = ColumnDataSource(df_htf.copy())
+
+    # print(df)
+    # print(df_htf)
+
+    _plot_multiple_ohlc()
+
+
+
+
+
+    # CustomJS-Callback zur dynamischen Filterung -> more efficiency
+    callback = CustomJS(args=dict(source_full=source,source_resampled=source_filtered_htf, source_filtered=source_filtered, x_range=fig_ohlc.x_range), code="""
+        const start = x_range.start;
+        const end = x_range.end;
+        const data_full = source_full.data;
+        const data_resampled = source_resampled.data;
+        const data_filtered = {index: [], Open: [], High: [], Low: [], Close: [], Volume: [], inc: [], datetime: []};
+        const current_bars = end - start;  // Anzahl der Balken im aktuellen Bereich
+        const threshold_ltf = 1000;
+
+    if (current_bars < threshold_ltf) {                   
+        for (let i = 0; i < data_full['index'].length; i++) {
+            if (data_full['index'][i] >= start && data_full['index'][i] <= end) {
+                data_filtered['index'].push(data_full['index'][i]);  // Übernehme den Index
+                data_filtered['Open'].push(data_full['Open'][i]);
+                data_filtered['High'].push(data_full['High'][i]);
+                data_filtered['Low'].push(data_full['Low'][i]);
+                data_filtered['Close'].push(data_full['Close'][i]);
+                data_filtered['Volume'].push(data_full['Volume'][i]);
+                data_filtered['inc'].push(data_full['inc'][i]);
+                data_filtered['datetime'].push(data_full['datetime'][i]);  // Füge datetime hinzu
+            }
+        }
+    } 
+                       
+    else {
+        for (let i = 0; i < data_resampled['index'].length; i++) {
+            if (data_resampled['index'][i] >= start && data_resampled['index'][i] <= end) {
+                data_filtered['index'].push(data_resampled['index'][i]);  // Übernehme den Index
+                data_filtered['Open'].push(data_resampled['Open'][i]);
+                data_filtered['High'].push(data_resampled['High'][i]);
+                data_filtered['Low'].push(data_resampled['Low'][i]);
+                data_filtered['Close'].push(data_resampled['Close'][i]);
+                data_filtered['Volume'].push(data_resampled['Volume'][i]);
+                data_filtered['inc'].push(data_resampled['inc'][i]);
+                data_filtered['datetime'].push(data_resampled['datetime'][i]);  // Füge datetime hinzu
+            }
+        }                    
+    }
+    
+    source_filtered.data = data_filtered;
+    source_filtered.change.emit();
+                        
+    //console.log("data_full index:", data_full['index'].length);
+    //console.log("data_filtered index:", data_filtered['index'].length);
+    //console.log("data_resampled index:", data_resampled['index'].length);
+    """)
+
+    # Verknüpfe das Callback mit Änderungen des x_range
+    #fig_ohlc.x_range.js_on_change('start', callback)
+    fig_ohlc.x_range.js_on_change('end', callback)
+
 
     def _plot_ohlc():
         """Main OHLC bars"""
-        fig_ohlc.segment('index', 'High', 'index', 'Low', source=source, color="black",
-                         legend_label='OHLC')
-        r = fig_ohlc.vbar('index', BAR_WIDTH, 'Open', 'Close', source=source,
-                          line_color="black", fill_color=inc_cmap, legend_label='OHLC')
-        return r
+        s = fig_ohlc.vbar('index', 0, 'High', 'Low', source=source_filtered, line_color="black")
+        r = fig_ohlc.vbar('index', BAR_WIDTH, 'Open', 'Close', source=source_filtered, 
+                          line_color="black", fill_color=inc_cmap, legend_label=f"{intervals[0]}")
+        s.visible = False  # Hide the main OHLC lines by default
+        r.visible = False  # Hide the main OHLC bars by default
+        return r, s
 
     def _plot_ohlc_trades():
         """Trade entry / exit markers on OHLC plot"""
@@ -592,25 +858,48 @@ return this.labels[index] || "";
                 if is_overlay:
                     ohlc_extreme_values[source_name] = arr
                     if is_scatter:
-                        r2 = fig.circle(
+                        fig.circle(
                             'index', source_name, source=source,
-                            color=color, line_color='black', fill_alpha=.8,
-                            radius=BAR_WIDTH / 2 * .9, **kwargs)
+                            legend_label=legend_labels[j], color=color,
+                            line_color='black', fill_alpha=.8,
+                            radius=BAR_WIDTH / 2 * .9)
                     else:
-                        r2 = fig.line(
-                            'index', source_name, source=source,
-                            line_color=color, line_width=1.4 if is_muted else 1.5, **kwargs)
-                    # r != r2
-                    r2.muted = is_muted
+                        if is_boxes:
+                            # TODO implement boxes for overlay indicators
+                            # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.quad
+                            # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.line
+                            print(source)
+                            fig.quad(
+                                left='left',     # linke Kante: timestamp - halb Barbreite
+                                right='right',   # rechte Kante: timestamp + halb Barbreite
+                                bottom='bottom', # Preis unten
+                                top='top',       # Preis oben
+                                source=source,
+                                fill_color=color,
+                                fill_alpha=0.3,
+                                line_color=color,
+                                legend_label=legend_labels[j]
+                            )
+                            #print("Boxes are not supported for overlay indicators yet. ")
+                        else:
+                            # print("Source name", source_name)
+                            # print(source.column_names)
+                            # print(pd.DataFrame(source.data).head())
+                            fig.line(
+                                'index', source_name, source=source,
+                                legend_label=legend_labels[j], line_color=color,
+                                line_width=1.3)
                 else:
                     if is_scatter:
                         r = fig.circle(
                             'index', source_name, source=source,
-                            color=color, radius=BAR_WIDTH / 2 * .6, **kwargs)
+                            legend_label=legend_labels[j], color=color,
+                            radius=BAR_WIDTH / 2 * .6)
                     else:
                         r = fig.line(
                             'index', source_name, source=source,
-                            line_color=color, line_width=1.3, **kwargs)
+                            legend_label=legend_labels[j], line_color=color,
+                            line_width=1.3)
                     # Add dashed centerline just because
                     mean = try_(lambda: float(pd.Series(arr).mean()), default=np.nan)
                     if not np.isnan(mean) and (abs(mean) < .1 or
@@ -647,10 +936,84 @@ return this.labels[index] || "";
         fig_volume = _plot_volume_section()
         figs_below_ohlc.append(fig_volume)
 
-    if superimpose and is_datetime_index:
-        _plot_superimposed_ohlc()
+    # if superimpose and is_datetime_index:
+    #     ltf_superimposed = _plot_superimposed_ohlc()
 
-    ohlc_bars = _plot_ohlc()
+   
+
+    # ohlc_bars, ohlc_lines = _plot_ohlc()  # OHLC-Kerzen plotten
+    ohlc_bars, ohlc_lines = multi_tf_ohlc["1Min"]
+
+    ltf_candles = ohlc_bars, ohlc_lines , *multi_tf_ohlc["15Min_resampled"]
+    mtf_candles = *multi_tf_ohlc["15Min"], *multi_tf_ohlc["4h_resampled"]
+    htf_candles = *multi_tf_ohlc["4h"], *multi_tf_ohlc["1D_resampled"]
+
+    hover_tool = set_tooltips(fig_ohlc, ohlc_tooltips, vline=True, renderers=[ohlc_bars])
+    # Hovertool changing renderers based on zoom level
+    # TODO Test Plotting with large amount of data
+    # Dynamic toggling of OHLC candles visibility based on zoom level
+    custom_js_toggle_ohlc = CustomJS(args=dict(ltf_candles=ltf_candles, 
+                                               mtf_candles=mtf_candles,
+                                                htf_candles=htf_candles,
+                                                hover_tool=hover_tool,
+                                                hover_tool_renderers=hover_tool_renderers), code="""
+        const x_range = cb_obj;
+        const visible_range = x_range.end - x_range.start;
+        const threshold_ltf = 1000;
+        const threshold_mtf = 15000; // Adjust this value as needed
+
+        // console.log("Visible range:", visible_range);
+        if (visible_range <= threshold_ltf) {
+            hover_tool.renderers = [ltf_candles[0]];  // Setze das Hovertool für LTF-Candles
+            for (let i = 0; i < ltf_candles.length; i++) {
+                ltf_candles[i].visible = true;  // Setze die Sichtbarkeit auf true
+            }
+            for (let i = 0; i < mtf_candles.length; i++) {
+                mtf_candles[i].visible = false;  // Setze die Sichtbarkeit auf false
+            }
+
+        } else if (visible_range <= threshold_mtf && visible_range > threshold_ltf) {
+            hover_tool.renderers = [mtf_candles[0]];  // Setze das Hovertool für MTF-Candles
+            for (let i = 0; i < ltf_candles.length; i++) {
+                ltf_candles[i].visible = false;  // Setze die Sichtbarkeit auf false
+            }
+            for (let i = 0; i < mtf_candles.length; i++) {
+                mtf_candles[i].visible = true;  // Setze die Sichtbarkeit auf true
+            }
+            for (let i = 0; i < htf_candles.length; i++) {
+                htf_candles[i].visible = false;  // Setze die Sichtbarkeit auf false
+            }
+        } else {
+            hover_tool.renderers = [htf_candles[0]];  // Setze das Hovertool für HTF-Candles
+            for (let i = 0; i < mtf_candles.length; i++) {
+                mtf_candles[i].visible = false;  // Setze die Sichtbarkeit auf false
+            }
+            for (let i = 0; i < htf_candles.length; i++) {
+                htf_candles[i].visible = true;  // Setze die Sichtbarkeit auf true
+            }                            
+        }
+    """)
+
+    
+    # filter legend items by name instead of index
+    custom_js_legend = CustomJS(args=dict(legend=fig_ohlc.legend[0], ltf_renderer=ltf_candles[0], mtf_renderer=mtf_candles[0], htf_renderer=htf_candles[0], ohlc_intervals=intervals), code="""
+        const items = legend.items;
+        for (let i = 0; i < items.length; i++) {
+                items[i].visible = items[i].renderers[0].visible;  // Show the item if it's in ohlc_intervals
+            
+        }
+        
+    """)
+
+    mtf_candles[0].js_on_change('visible', custom_js_legend)
+
+    legend = fig_ohlc.legend[0]
+
+    for item in legend.items:
+        if not item.label.value in ltf_legend_labels:
+            item.visible = False
+
+
     if plot_trades:
         _plot_ohlc_trades()
     indicator_figs = _plot_indicators()
@@ -669,9 +1032,23 @@ return this.labels[index] || "";
                           source=source)
     if plot_volume:
         custom_js_args.update(volume_range=fig_volume.y_range)
+    else:
+        custom_js_args.update(volume_range=None)
 
+    fig_ohlc.x_range.js_on_change('start', CustomJS(args=custom_js_args,
+                                                  code=_AUTOSCALE_JS_CALLBACK))
     fig_ohlc.x_range.js_on_change('end', CustomJS(args=custom_js_args,
                                                   code=_AUTOSCALE_JS_CALLBACK))
+    
+    fig_ohlc.x_range.js_on_change('start', custom_js_toggle_ohlc)
+
+    visible_range = fig_ohlc.x_range.end - fig_ohlc.x_range.start
+    if visible_range > 1000:
+        for lines in ltf_candles:
+            lines.visible = False
+    else:
+        for lines in ltf_candles:
+            lines.visible = True
 
     figs = figs_above_ohlc + [fig_ohlc] + figs_below_ohlc
     linked_crosshair = CrosshairTool(
@@ -706,6 +1083,11 @@ return this.labels[index] || "";
     if plot_width is None:
         kwargs['sizing_mode'] = 'stretch_width'
 
+    print("ABOVE:", len(figs_above_ohlc))
+    print("MAIN:", fig_ohlc)
+    print("BELOW:", len(figs_below_ohlc))
+
+
     fig = gridplot(
         figs,
         ncols=1,
@@ -714,8 +1096,19 @@ return this.labels[index] || "";
         merge_tools=True,
         **kwargs  # type: ignore
     )
-    show(fig, browser=None if open_browser else 'none')
-    return fig
+
+    # Verbinde das Callback mit Änderungen der Sichtbarkeit
+    #ltf_candles[0].js_on_change('visible', custom_js_legend)
+    
+    #htf_candles[0].js_on_change('visible', custom_js_legend)
+    fig_ohlc.js_on_event(DocumentReady, custom_js_legend)
+
+    # Deactivate the legend click policy for the OHLC plot
+    fig_ohlc.legend.click_policy = 'none'
+    # TODO show
+    #show(fig, browser=None if open_browser else 'none')
+
+    return fig #fig_ohlc #fig, 
 
 
 def plot_heatmaps(heatmap: pd.Series, agg: Union[Callable, str], ncols: int,
