@@ -1083,9 +1083,9 @@ return this.labels[index] || "";
     if plot_width is None:
         kwargs['sizing_mode'] = 'stretch_width'
 
-    print("ABOVE:", len(figs_above_ohlc))
-    print("MAIN:", fig_ohlc)
-    print("BELOW:", len(figs_below_ohlc))
+    # print("ABOVE:", len(figs_above_ohlc))
+    # print("MAIN:", fig_ohlc)
+    # print("BELOW:", len(figs_below_ohlc))
 
 
     fig = gridplot(
