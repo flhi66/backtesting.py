@@ -414,6 +414,7 @@ class Order:
         self.__tp_price = tp_price
         self.__parent_trade = parent_trade
         self.__tag = tag
+        self._risk_dollars = 0
 
     def _replace(self, **kwargs):
         for k, v in kwargs.items():
@@ -555,6 +556,7 @@ class Trade:
         self.__tp_order: Optional[Order] = None
         self.__tag = tag
         self._commissions = 0
+        self._risk_dollars = 0
 
     def __repr__(self):
         return f'<Trade size={self.__size} time={self.__entry_bar}-{self.__exit_bar or ""} ' \
@@ -676,6 +678,16 @@ class Trade:
         """Trade total value in cash (volume × price)."""
         price = self.__exit_price or self.__broker.last_price
         return abs(self.__size) * price
+    
+    @property
+    def r(self):
+        """
+        Profit/Loss in Einheiten des eingesetzten Risikos (R).
+        """
+        if not hasattr(self, '_risk_dollars'):
+            raise ValueError("Trade._risk_dollars muss beim Entry gesetzt werden")
+        
+        return self.pl / (self._risk_dollars or np.nan)
 
     # SL/TP management API
 
@@ -995,7 +1007,8 @@ class _Broker:
                                  order.sl,
                                  order.tp,
                                  time_index,
-                                 order.tag)
+                                 order.tag,
+                                 order._risk_dollars)
 
                 # We need to reprocess the SL/TP orders newly added to the queue.
                 # This allows e.g. SL hitting in the same bar the order was open.
@@ -1068,8 +1081,9 @@ class _Broker:
         closed_trade._commissions = commission + trade_open_commission
 
     def _open_trade(self, price: float, size: int,
-                    sl: Optional[float], tp: Optional[float], time_index: int, tag):
+                    sl: Optional[float], tp: Optional[float], time_index: int, tag, risk_dollars):
         trade = Trade(self, size, price, time_index, tag)
+        trade._risk_dollars = risk_dollars
         self.trades.append(trade)
         # Apply broker commission at trade open
         self._cash -= self._commission(size, price)
@@ -1487,12 +1501,14 @@ class Backtest:
             grid_frac = (1 if max_tries is None else
                          max_tries if 0 < max_tries <= 1 else
                          max_tries / _grid_size())
+            print(f'Grid search fraction: {grid_frac}')
             param_combos = [dict(params)  # back to dict so it pickles
                             for params in (AttrDict(params)
                                            for params in product(*(zip(repeat(k), _tuple(v))
                                                                    for k, v in kwargs.items())))
                             if constraint(params)
                             and rand() <= grid_frac]
+            print(f'Admissible parameter combinations: {len(param_combos)}')
             if not param_combos:
                 raise ValueError('No admissible parameter combinations to test')
 

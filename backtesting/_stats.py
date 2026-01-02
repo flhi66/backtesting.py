@@ -44,11 +44,22 @@ def compute_stats(
     assert -1 < risk_free_rate < 1
 
     index = ohlc_data.index
-    dd = 1 - equity / np.maximum.accumulate(equity)
+    
+    # Absolute Drawdown in Dollar
+    dd_abs = np.maximum.accumulate(equity) - equity
+    initial_capital = equity[0]
+    dd_pct = dd_abs / initial_capital
+
+
+    # dd = 1 - equity / np.maximum.accumulate(equity)
+    dd = dd_pct
     dd_dur, dd_peaks = compute_drawdown_duration_peaks(pd.Series(dd, index=index))
+    
+
 
     equity_df = pd.DataFrame({
         'Equity': equity,
+        'Drawdown$': dd_abs,
         'DrawdownPct': dd,
         'DrawdownDuration': dd_dur},
         index=index)
@@ -67,6 +78,7 @@ def compute_stats(
             'SL': [t.sl for t in trades],
             'TP': [t.tp for t in trades],
             'PnL': [t.pl for t in trades],
+            'R' : [t.r for t in trades],
             'Commission': [t._commissions for t in trades],
             'ReturnPct': [t.pl_pct for t in trades],
             'EntryTime': [t.entry_time for t in trades],
@@ -172,12 +184,15 @@ def compute_stats(
     s.loc['Win Rate [%]'] = win_rate * 100
     s.loc['Best Trade [%]'] = returns.max() * 100
     s.loc['Worst Trade [%]'] = returns.min() * 100
+    s.loc['Best Trade [R]'] = trades_df['R'].max()
+    s.loc['Worst Trade [R]'] = trades_df['R'].min()
     mean_return = geometric_mean(returns)
     s.loc['Avg. Trade [%]'] = mean_return * 100
     s.loc['Max. Trade Duration'] = _round_timedelta(durations.max())
     s.loc['Avg. Trade Duration'] = _round_timedelta(durations.mean())
     s.loc['Profit Factor'] = returns[returns > 0].sum() / (abs(returns[returns < 0].sum()) or np.nan)  # noqa: E501
     s.loc['Expectancy [%]'] = returns.mean() * 100
+    s.loc['Expectancy [R]'] = trades_df['R'].mean()
     s.loc['SQN'] = np.sqrt(n_trades) * pl.mean() / (pl.std() or np.nan)
     s.loc['Kelly Criterion'] = win_rate - (1 - win_rate) / (pl[pl > 0].mean() / -pl[pl < 0].mean())
 
