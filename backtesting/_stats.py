@@ -193,6 +193,9 @@ def compute_stats(
     s.loc['Profit Factor'] = returns[returns > 0].sum() / (abs(returns[returns < 0].sum()) or np.nan)  # noqa: E501
     s.loc['Expectancy [%]'] = returns.mean() * 100
     s.loc['Expectancy [R]'] = trades_df['R'].mean()
+    s.loc['R Std'] = trades_df['R'].std()
+    s.loc['Expectancy [R Std]'] = trades_df['R'].mean() / trades_df['R'].std()
+
     s.loc['SQN'] = np.sqrt(n_trades) * pl.mean() / (pl.std() or np.nan)
     s.loc['Kelly Criterion'] = win_rate - (1 - win_rate) / (pl[pl > 0].mean() / -pl[pl < 0].mean())
 

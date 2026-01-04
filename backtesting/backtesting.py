@@ -557,6 +557,7 @@ class Trade:
         self.__tag = tag
         self._commissions = 0
         self._risk_dollars = 0
+        self._exit_reason = "UNKNOWN"
 
     def __repr__(self):
         return f'<Trade size={self.__size} time={self.__entry_bar}-{self.__exit_bar or ""} ' \
@@ -857,7 +858,7 @@ class _Broker:
         if equity <= 0:
             assert self.margin_available <= 0
             for trade in self.trades:
-                self._close_trade(trade, self._data.Close[-1], i)
+                self._close_trade(trade, self._data.Close[-1], i, "FORCED")
             self._cash = 0
             self._equity[i:] = 0
             raise _OutOfMoneyError
@@ -925,8 +926,14 @@ class _Broker:
                 # order and part of the trade was already closed beforehand
                 size = copysign(min(abs(_prev_size), abs(order.size)), order.size)
                 # If this trade isn't already closed (e.g. on multiple `trade.close(.5)` calls)
+                exit_reason = "UNKNOWN"
+                if order is trade._sl_order:
+                    exit_reason = "SL"
+                elif order is trade._tp_order:
+                    exit_reason = "TP"
+
                 if trade in self.trades:
-                    self._reduce_trade(trade, price, size, time_index)
+                    self._reduce_trade(trade, price, size, time_index, exit_reason)
                     assert order.size != -_prev_size or trade not in self.trades
                     if price == stop_price:
                         # Set SL back on the order for stats._trades["SL"]
@@ -983,12 +990,12 @@ class _Broker:
                     # Order size greater than this opposite-directed existing trade,
                     # so it will be closed completely
                     if abs(need_size) >= abs(trade.size):
-                        self._close_trade(trade, price, time_index)
+                        self._close_trade(trade, price, time_index, "NETTING")
                         need_size += trade.size
                     else:
                         # The existing trade is larger than the new order,
                         # so it will only be closed partially
-                        self._reduce_trade(trade, price, need_size, time_index)
+                        self._reduce_trade(trade, price, need_size, time_index, "PARTIAL")
                         need_size = 0
 
                     if not need_size:
@@ -1045,7 +1052,7 @@ class _Broker:
         if reprocess_orders:
             self._process_orders()
 
-    def _reduce_trade(self, trade: Trade, price: float, size: float, time_index: int):
+    def _reduce_trade(self, trade: Trade, price: float, size: float, time_index: int, exit_reason: str = "UNKNOWN"):
         assert trade.size * size < 0
         assert abs(trade.size) >= abs(size)
 
@@ -1060,21 +1067,23 @@ class _Broker:
                 trade._sl_order._replace(size=-trade.size)
             if trade._tp_order:
                 trade._tp_order._replace(size=-trade.size)
-
+            exit_reason="REDUCED"
             # ... by closing a reduced copy of it
             close_trade = trade._copy(size=-size, sl_order=None, tp_order=None)
             self.trades.append(close_trade)
 
-        self._close_trade(close_trade, price, time_index)
+        self._close_trade(close_trade, price, time_index, exit_reason)
 
-    def _close_trade(self, trade: Trade, price: float, time_index: int):
+    def _close_trade(self, trade: Trade, price: float, time_index: int, exit_reason: str = "UNKNOWN"):
         self.trades.remove(trade)
         if trade._sl_order:
             self.orders.remove(trade._sl_order)
         if trade._tp_order:
             self.orders.remove(trade._tp_order)
 
+        trade._exit_reason = exit_reason
         closed_trade = trade._replace(exit_price=price, exit_bar=time_index)
+        closed_trade._exit_reason = exit_reason
         self.closed_trades.append(closed_trade)
         # Apply commission one more time at trade exit
         commission = self._commission(trade.size, price)
