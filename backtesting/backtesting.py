@@ -931,6 +931,10 @@ class _Broker:
                     if price == stop_price:
                         # Set SL back on the order for stats._trades["SL"]
                         trade._sl_order._replace(stop_price=stop_price)
+                    else:
+                        if order is trade._sl_order:
+                            trade._sl_order._replace(stop_price=stop_price)
+                            # print("Trade closed by SL/TP order and price != stop_price")
                 if order in (trade._sl_order,
                              trade._tp_order):
                     assert order.size == -trade.size
@@ -1024,6 +1028,7 @@ class _Broker:
                         reprocess_orders = True
                     elif (low <= (order.sl or -np.inf) <= high or
                           low <= (order.tp or -np.inf) <= high):
+                        reprocess_orders = True
                         warnings.warn(
                             f"({data.index[-1]}) A contingent SL/TP order would execute in the "
                             "same bar its parent stop/limit order was turned into a trade. "
