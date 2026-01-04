@@ -877,6 +877,8 @@ class _Broker:
 
             # Check if stop condition was hit
             stop_price = order.stop
+            sl_hit_this_bar = False
+            
             if stop_price:
                 is_stop_hit = ((high >= stop_price) if order.is_long else (low <= stop_price))
                 if not is_stop_hit:
@@ -884,25 +886,61 @@ class _Broker:
 
                 # > When the stop price is reached, a stop order becomes a market/limit order.
                 # https://www.sec.gov/fast-answers/answersstopordhtm.html
+                sl_hit_this_bar = True
                 order._replace(stop_price=None)
 
             # Determine purchase price.
             # Check if limit order can be filled.
-            if order.limit:
-                is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
-                # When stop and limit are hit within the same bar, we pessimistically
-                # assume limit was hit before the stop (i.e. "before it counts")
-                is_limit_hit_before_stop = (is_limit_hit and
-                                            (order.limit <= (stop_price or -np.inf)
-                                             if order.is_long
-                                             else order.limit >= (stop_price or np.inf)))
-                if not is_limit_hit or is_limit_hit_before_stop:
-                    continue
+            # if order.limit:
+            #     if sl_hit_this_bar:
+            #         continue
+            #     is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
+            #     # When stop and limit are hit within the same bar, we pessimistically
+            #     # assume limit was hit before the stop (i.e. "before it counts")
+            #     is_limit_hit_before_stop = (is_limit_hit and
+            #                                 (order.limit <= (stop_price or -np.inf)
+            #                                  if order.is_long
+            #                                  else order.limit >= (stop_price or np.inf)))
+            #     if not is_limit_hit or is_limit_hit_before_stop:
+            #         continue
 
-                # stop_price, if set, was hit within this bar
-                price = (min(stop_price or open, order.limit)
-                         if order.is_long else
-                         max(stop_price or open, order.limit))
+            #     # stop_price, if set, was hit within this bar
+            #     price = (min(stop_price or open, order.limit)
+            #              if order.is_long else
+            #              max(stop_price or open, order.limit))
+            if order.limit:
+                # Exit-Order (TP)
+                if order.parent_trade:
+                    # Wenn SL in dieser Bar getroffen wurde → TP darf NICHT zählen
+                    if sl_hit_this_bar:
+                        continue
+
+                    # normales TP-Hit
+                    is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
+                    if not is_limit_hit:
+                        continue
+
+                    price = order.limit
+
+                # Entry-Order
+                else:
+                    is_limit_hit = low <= order.limit if order.is_long else high >= order.limit
+                    is_limit_hit_before_stop = (
+                        is_limit_hit and
+                        (order.limit <= (stop_price or -np.inf)
+                        if order.is_long
+                        else order.limit >= (stop_price or np.inf))
+                    )
+
+                    if not is_limit_hit or is_limit_hit_before_stop:
+                        continue
+
+                    price = (
+                        min(stop_price or open, order.limit)
+                        if order.is_long else
+                        max(stop_price or open, order.limit)
+                    )
+
             else:
                 # Market-if-touched / market order
                 # Contingent orders always on next open
@@ -921,6 +959,9 @@ class _Broker:
             # If order is a SL/TP order, it should close an existing trade it was contingent upon
             if order.parent_trade:
                 trade = order.parent_trade
+                if trade.entry_bar == self._i:
+                    if order is trade._tp_order:
+                        continue
                 _prev_size = trade.size
                 # If order.size is "greater" than trade.size, this order is a trade.close()
                 # order and part of the trade was already closed beforehand

@@ -33,6 +33,50 @@ def geometric_mean(returns: pd.Series) -> float:
         return 0
     return np.exp(np.log(returns).sum() / (len(returns) or np.nan)) - 1
 
+def risk_of_ruin_mc(
+    R: np.ndarray,
+    risk_per_trade: float = 0.01,
+    max_dd: float = 0.10,
+    n_trades: int = 500,
+    n_sim: int = 10_000,
+):
+    """
+    Monte-Carlo Risk of Ruin.
+    
+    Ruin = Peak-to-Trough Drawdown >= max_dd
+    """
+    R = R[~np.isnan(R)]
+    if len(R) == 0:
+        return np.nan
+
+    ruin_count = 0
+    max_dds = []
+
+    for _ in range(n_sim):
+        equity = 1.0
+        peak = 1.0
+        worst_dd = 0.0
+
+        sampled_R = np.random.choice(R, size=n_trades, replace=True)
+
+        for r in sampled_R:
+            equity *= (1 + r * risk_per_trade)
+            peak = max(peak, equity)
+            dd = 1 - equity / peak
+            worst_dd = max(worst_dd, dd)
+
+            if dd >= max_dd:
+                ruin_count += 1
+                break
+
+        max_dds.append(worst_dd)
+
+    return {
+        "ruin_prob": ruin_count / n_sim,
+        "median_max_dd": np.median(max_dds),
+        "dd_95": np.percentile(max_dds, 95),
+    }
+
 
 def compute_stats(
         trades: Union[List['Trade'], pd.DataFrame],
@@ -48,11 +92,11 @@ def compute_stats(
     # Absolute Drawdown in Dollar
     dd_abs = np.maximum.accumulate(equity) - equity
     initial_capital = equity[0]
-    dd_pct = dd_abs / initial_capital
+    # dd_pct = dd_abs / initial_capital
 
 
-    # dd = 1 - equity / np.maximum.accumulate(equity)
-    dd = dd_pct
+    dd = 1 - equity / np.maximum.accumulate(equity)
+    # dd = dd_pct
     dd_dur, dd_peaks = compute_drawdown_duration_peaks(pd.Series(dd, index=index))
     
 
@@ -83,6 +127,7 @@ def compute_stats(
             'ReturnPct': [t.pl_pct for t in trades],
             'EntryTime': [t.entry_time for t in trades],
             'ExitTime': [t.exit_time for t in trades],
+            'ExitReason': [t._exit_reason for t in trades],
         })
         trades_df['Duration'] = trades_df['ExitTime'] - trades_df['EntryTime']
         trades_df['Tag'] = [t.tag for t in trades]
@@ -97,6 +142,9 @@ def compute_stats(
                     trades_df[f'Exit_{ind.name}{suffix}'] = values[trades_df['ExitBar'].values]
 
         commissions = sum(t._commissions for t in trades)
+    risk_per_trade_dollars = trades[0]._risk_dollars if trades else np.nan
+    risk_per_trade = risk_per_trade_dollars / initial_capital
+    number_of_trades = len(trades)
     del trades
 
     pl = trades_df['PnL']
@@ -121,6 +169,7 @@ def compute_stats(
     s.loc['Exposure Time [%]'] = have_position.mean() * 100  # In "n bars" time, not index time
     s.loc['Equity Final [$]'] = equity[-1]
     s.loc['Equity Peak [$]'] = equity.max()
+    s.loc['Equity Min [$]'] = equity.min()
     if commissions:
         s.loc['Commissions [$]'] = commissions
     s.loc['Return [%]'] = (equity[-1] - equity[0]) / equity[0] * 100
@@ -195,6 +244,22 @@ def compute_stats(
     s.loc['Expectancy [R]'] = trades_df['R'].mean()
     s.loc['R Std'] = trades_df['R'].std()
     s.loc['Expectancy [R Std]'] = trades_df['R'].mean() / trades_df['R'].std()
+    # ---- Risk of Ruin (Monte Carlo) ----
+    R_values = trades_df['R'].values
+
+    ror_10 = risk_of_ruin_mc(
+        trades_df['R'],
+        risk_per_trade=risk_per_trade,   # 1% Risiko pro Trade
+        max_dd=0.10,           # 10% Drawdown (Default)
+        n_trades=number_of_trades*4,
+        n_sim=5000,
+    )
+
+    if isinstance(ror_10, dict):
+        s.loc['Risk of Ruin (10% DD) [%]'] = ror_10["ruin_prob"] * 100
+        s.loc['Median Max DD (MC) [%]'] = ror_10["median_max_dd"] * 100
+        s.loc['95% Worst DD (MC) [%]'] = ror_10["dd_95"] * 100
+
 
     s.loc['SQN'] = np.sqrt(n_trades) * pl.mean() / (pl.std() or np.nan)
     s.loc['Kelly Criterion'] = win_rate - (1 - win_rate) / (pl[pl > 0].mean() / -pl[pl < 0].mean())
