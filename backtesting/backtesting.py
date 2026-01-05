@@ -1123,8 +1123,11 @@ class _Broker:
             self.orders.remove(trade._tp_order)
 
         trade._exit_reason = exit_reason
+        
         closed_trade = trade._replace(exit_price=price, exit_bar=time_index)
         closed_trade._exit_reason = exit_reason
+        if round(abs(closed_trade.r), 3) == 0:
+            trade._exit_reason = "BE"
         self.closed_trades.append(closed_trade)
         # Apply commission one more time at trade exit
         commission = self._commission(trade.size, price)
