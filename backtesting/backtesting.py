@@ -557,7 +557,7 @@ class Trade:
         self.__tag = tag
         self._commissions = 0
         self._risk_dollars = 0
-        self._exit_reason = "UNKNOWN"
+        self._exit_reason = "MANUALLY"
 
     def __repr__(self):
         return f'<Trade size={self.__size} time={self.__entry_bar}-{self.__exit_bar or ""} ' \
@@ -967,7 +967,7 @@ class _Broker:
                 # order and part of the trade was already closed beforehand
                 size = copysign(min(abs(_prev_size), abs(order.size)), order.size)
                 # If this trade isn't already closed (e.g. on multiple `trade.close(.5)` calls)
-                exit_reason = "UNKNOWN"
+                exit_reason = "MANUALLY"
                 if order is trade._sl_order:
                     exit_reason = "SL"
                 elif order is trade._tp_order:
