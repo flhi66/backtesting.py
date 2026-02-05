@@ -119,6 +119,8 @@ def compute_stats(
             'ExitBar': [t.exit_bar for t in trades],
             'EntryPrice': [t.entry_price for t in trades],
             'ExitPrice': [t.exit_price for t in trades],
+            'EntrySpread' : [t._entry_spread for t in trades],
+            'ExitSpread' : [t._exit_spread for t in trades],
             'SL': [t.sl for t in trades],
             'TP': [t.tp for t in trades],
             'PnL': [t.pl for t in trades],

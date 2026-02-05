@@ -235,6 +235,18 @@ class _Data:
     @property
     def Volume(self) -> _Array:
         return self.__get_array('Volume')
+    
+    @property
+    def Ask(self) -> _Array:
+        return self.__get_array('Ask')
+    
+    @property
+    def Bid(self) -> _Array:
+        return self.__get_array('Bid')
+    
+    @property
+    def Spread(self) -> _Array:
+        return self.__get_array('Spread')
 
     @property
     def index(self) -> pd.DatetimeIndex:
