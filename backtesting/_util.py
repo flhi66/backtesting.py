@@ -238,11 +238,11 @@ class _Data:
     
     @property
     def Ask(self) -> _Array:
-        return self.__get_array('Ask')
+        return self.__get_array('Close_ask')
     
     @property
     def Bid(self) -> _Array:
-        return self.__get_array('Bid')
+        return self.__get_array('Close_bid')
     
     @property
     def Spread(self) -> _Array:

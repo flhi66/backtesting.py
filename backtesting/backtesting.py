@@ -236,7 +236,7 @@ class Strategy(metaclass=ABCMeta):
         See also `Strategy.sell()`.
         """
         assert 0 < size < 1 or round(size) == size >= 1, \
-            "size must be a positive fraction of equity, or a positive whole number of units"
+            f"size must be a positive fraction of equity, or a positive whole number of units, size= {size}"
         return self._broker.new_order(size, limit, stop, sl, tp, tag)
 
     def sell(self, *,
@@ -267,7 +267,7 @@ class Strategy(metaclass=ABCMeta):
             use `Position.close()` or `Trade.close()`.
         """
         assert 0 < size < 1 or round(size) == size >= 1, \
-            "size must be a positive fraction of equity, or a positive whole number of units"
+            f"size must be a positive fraction of equity, or a positive whole number of units, size= {size}"
         return self._broker.new_order(-size, limit, stop, sl, tp, tag)
 
     @property
@@ -724,43 +724,43 @@ class Trade:
     def tp(self, price: float):
         self.__set_contingent('tp', price)
 
-    # def __set_contingent(self, type, price):
-    #     assert type in ('sl', 'tp')
-    #     assert price is None or 0 < price < np.inf, f'Make sure 0 < price < inf! price: {price}'
-    #     attr = f'_{self.__class__.__qualname__}__{type}_order'
-    #     order: Order = getattr(self, attr)
-    #     if order:
-    #         order.cancel()
-    #     if price:
-    #         kwargs = {'stop': price} if type == 'sl' else {'limit': price}
-    #         order = self.__broker.new_order(-self.size, trade=self, tag=self.tag, **kwargs)
-    #         setattr(self, attr, order)
-
     def __set_contingent(self, type, price):
-        assert type in ("sl", "tp")
-        assert price is None or 0 < price < np.inf, f"Make sure 0 < price < inf! price: {price}"
-
-        if type == "sl":
-            order = self.__sl_order
-        else:
-            order = self.__tp_order
-
+        assert type in ('sl', 'tp')
+        assert price is None or 0 < price < np.inf, f'Make sure 0 < price < inf! price: {price}'
+        attr = f'_{self.__class__.__qualname__}__{type}_order'
+        order: Order = getattr(self, attr)
         if order:
             order.cancel()
-
         if price:
-            kwargs = {"stop": price} if type == "sl" else {"limit": price}
-            order = self.__broker.new_order(
-                -self.size,
-                trade=self,
-                tag=self.tag,
-                **kwargs
-            )
+            kwargs = {'stop': price} if type == 'sl' else {'limit': price}
+            order = self.__broker.new_order(-self.size, trade=self, tag=self.tag, **kwargs)
+            setattr(self, attr, order)
 
-            if type == "sl":
-                self.__sl_order = order
-            else:
-                self.__tp_order = order
+    # def __set_contingent(self, type, price):
+    #     assert type in ("sl", "tp")
+    #     assert price is None or 0 < price < np.inf, f"Make sure 0 < price < inf! price: {price}"
+
+    #     if type == "sl":
+    #         order = self.__sl_order
+    #     else:
+    #         order = self.__tp_order
+
+    #     if order:
+    #         order.cancel()
+
+    #     if price:
+    #         kwargs = {"stop": price} if type == "sl" else {"limit": price}
+    #         order = self.__broker.new_order(
+    #             -self.size,
+    #             trade=self,
+    #             tag=self.tag,
+    #             **kwargs
+    #         )
+
+    #         if type == "sl":
+    #             self.__sl_order = order
+    #         else:
+    #             self.__tp_order = order
 
 
 
@@ -858,24 +858,24 @@ class _Broker:
         """ Price at the last (current) close. """
         return self._data.Close[-1]
 
-    # def _adjusted_price(self, size=None, price=None) -> float:
-    #     """
-    #     Long/short `price`, adjusted for spread.
-    #     In long positions, the adjusted price is a fraction higher, and vice versa.
-    #     """
-    #     return (price or self.last_price) * (1 + copysign(self._spread, size))
+    def _adjusted_price(self, size=None, price=None) -> float:
+        """
+        Long/short `price`, adjusted for spread.
+        In long positions, the adjusted price is a fraction higher, and vice versa.
+        """
+        return (price or self.last_price) * (1 + copysign(self._spread, size))
     
-    def _adjusted_price(self, size, price=None, i=None):
-        if i is None:
-            i = self._i
+    # def _adjusted_price(self, size, price=None, i=None):
+    #     if i is None:
+    #         i = self._i
 
-        # spread = self._data.Spread[i]
+    #     # spread = self._data.Spread[i]
 
-        # Long → Ask, Short → Bid
-        if size > 0:
-            return self._data.Ask[i]
-        else:
-            return self._data.Bid[i]
+    #     # Long → Ask, Short → Bid
+    #     if size > 0:
+    #         return self._data.Ask[i]
+    #     else:
+    #         return self._data.Bid[i]
 
 
     @property
@@ -1096,8 +1096,7 @@ class _Broker:
 
             # Open a new trade
             if need_size:
-                entry_price = self._adjusted_price(need_size, price, time_index)
-                self._open_trade(entry_price,
+                self._open_trade(adjusted_price,
                                  need_size,
                                  order.sl,
                                  order.tp,
@@ -1167,13 +1166,13 @@ class _Broker:
 
         trade._exit_reason = exit_reason
         
-        # closed_trade = trade._replace(exit_price=price, exit_bar=time_index)
-        exit_price = self._adjusted_price(-trade.size, price, time_index)
+        closed_trade = trade._replace(exit_price=price, exit_bar=time_index)
+        # exit_price = self._adjusted_price(-trade.size, price, time_index)
 
-        closed_trade = trade._replace(
-            exit_price=exit_price,
-            exit_bar=time_index
-        )
+        # closed_trade = trade._replace(
+        #     exit_price=exit_price,
+        #     exit_bar=time_index
+        # )
 
         closed_trade._exit_reason = exit_reason
         closed_trade._exit_spread = self._data.Spread[time_index]

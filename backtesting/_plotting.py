@@ -864,24 +864,24 @@ return this.labels[index] || "";
                             line_color='black', fill_alpha=.8,
                             radius=BAR_WIDTH / 2 * .9)
                     else:
-                        if is_boxes:
-                            # TODO implement boxes for overlay indicators
-                            # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.quad
-                            # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.line
-                            print(source)
-                            fig.quad(
-                                left='left',     # linke Kante: timestamp - halb Barbreite
-                                right='right',   # rechte Kante: timestamp + halb Barbreite
-                                bottom='bottom', # Preis unten
-                                top='top',       # Preis oben
-                                source=source,
-                                fill_color=color,
-                                fill_alpha=0.3,
-                                line_color=color,
-                                legend_label=legend_labels[j]
-                            )
-                            #print("Boxes are not supported for overlay indicators yet. ")
-                        else:
+                        # if is_boxes:
+                        #     # TODO implement boxes for overlay indicators
+                        #     # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.quad
+                        #     # https://docs.bokeh.org/en/latest/docs/reference/plotting/figure.html#bokeh.plotting.figure.line
+                        #     print(source)
+                        #     fig.quad(
+                        #         left='left',     # linke Kante: timestamp - halb Barbreite
+                        #         right='right',   # rechte Kante: timestamp + halb Barbreite
+                        #         bottom='bottom', # Preis unten
+                        #         top='top',       # Preis oben
+                        #         source=source,
+                        #         fill_color=color,
+                        #         fill_alpha=0.3,
+                        #         line_color=color,
+                        #         legend_label=legend_labels[j]
+                        #     )
+                        #     #print("Boxes are not supported for overlay indicators yet. ")
+                        # else:
                             # print("Source name", source_name)
                             # print(source.column_names)
                             # print(pd.DataFrame(source.data).head())
