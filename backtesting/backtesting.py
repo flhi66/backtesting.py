@@ -1643,6 +1643,7 @@ class Backtest:
                     total=len(param_combos),
                     desc='Backtest.optimize'
                 )
+                print("# of results:", len(results))
                 for param_batch, result in zip(_batch(param_combos), results):
                     for params, stats in zip(param_batch, result):
                         if stats is not None:
@@ -1740,17 +1741,40 @@ class Backtest:
             raise ValueError(f"Method should be 'grid' or 'sambo', not {method!r}")
         return output
 
+    # @staticmethod
+    # def _mp_task(arg):
+    #     bt, data_shm, params_batch = arg
+    #     bt._data, shm = SharedMemoryManager.shm2df(data_shm)
+    #     try:
+    #         return [stats.filter(regex='^[^_]') if stats['# Trades'] else None
+    #                 for stats in (bt.run(**params)
+    #                               for params in params_batch)]
+    #     finally:
+    #         for shmem in shm:
+    #             shmem.close()
     @staticmethod
     def _mp_task(arg):
         bt, data_shm, params_batch = arg
         bt._data, shm = SharedMemoryManager.shm2df(data_shm)
         try:
-            return [stats.filter(regex='^[^_]') if stats['# Trades'] else None
-                    for stats in (bt.run(**params)
-                                  for params in params_batch)]
+            results = []
+            for params in params_batch:
+                try:
+                    stats = bt.run(**params)
+                    if stats['# Trades']:
+                        results.append(stats.filter(regex='^[^_]'))
+                    else:
+                        results.append(None)
+                except Exception:
+                    print("inner error")
+                    results.append(None)
+            return results
+        except:
+            print("error")
         finally:
             for shmem in shm:
                 shmem.close()
+
 
     def plot(self, *, results: pd.Series = None, filename=None, plot_width=None,
              plot_equity=True, plot_return=False, plot_pl=True,

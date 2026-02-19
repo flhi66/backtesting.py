@@ -246,6 +246,7 @@ def compute_stats(
     s.loc['Max. Trade Duration'] = _round_timedelta(durations.max())
     s.loc['Avg. Trade Duration'] = _round_timedelta(durations.mean())
     s.loc['Profit Factor'] = returns[returns > 0].sum() / (abs(returns[returns < 0].sum()) or np.nan)  # noqa: E501
+    s.loc['Profit Factor PnL'] = pl[pl > 0].sum() / (abs(pl[pl < 0].sum()) or np.nan)  # noqa: E501
     s.loc['Expectancy [%]'] = returns.mean() * 100
     s.loc['Expectancy [R]'] = trades_df['R'].mean()
     s.loc['R Std'] = trades_df['R'].std()
